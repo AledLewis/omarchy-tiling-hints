@@ -309,26 +309,45 @@ Scope {
     }
   }
 
-  // A card of hints pinned just inside one edge of a window.
+  // A card of hints for one edge of a window.
   component EdgeCard: Card {
-    property string dir: "l"
     property var hints: []
-    property var box: ({ w: 0, h: 0 })
-    property int inset: Style.spacing.xl
-    // In a narrow column the left and right cards would collide with each
-    // other and the action card, so stagger them above and below it.
-    property bool narrow: false
-    visible: hints.length > 0
-    x: dir === "l" ? inset
-      : dir === "r" ? box.w - width - inset
-      : (box.w - width) / 2
-    y: dir === "u" ? inset
-      : dir === "d" ? box.h - height - inset
-      : (box.h - height) / 2 + (narrow ? (dir === "l" ? -1 : 1) * box.h / 4 : 0)
     Repeater {
       model: hints
       delegate: HintRow { required property var modelData; hint: modelData }
     }
+  }
+
+  // Wraps one card so the monitor's layout pass can place it. It reports its
+  // size while `wanted`, and sits wherever the pass put it (in screen
+  // coordinates, made local to its window frame, which may be animating).
+  component Placed: Item {
+    property var host: null
+    property string cardId: ""
+    property bool wanted: false
+    property var frameRect: ({ x: 0, y: 0 })
+    default property alias content: holder.data
+
+    readonly property var place: host ? host.placements[cardId] : undefined
+    readonly property int measuredW: Math.ceil(holder.childrenRect.width)
+    readonly property int measuredH: Math.ceil(holder.childrenRect.height)
+
+    width: measuredW
+    height: measuredH
+    x: place ? place.x - frameRect.x : 0
+    y: place ? place.y - frameRect.y : 0
+    visible: wanted && !!place && !place.hidden
+
+    function report() { if (host) host.reportCard(cardId, wanted ? measuredW : 0, wanted ? measuredH : 0) }
+    onWantedChanged: report()
+    onMeasuredWChanged: report()
+    onMeasuredHChanged: report()
+    onCardIdChanged: report()
+    onHostChanged: report()
+    Component.onCompleted: report()
+    Component.onDestruction: if (host) host.reportCard(cardId, 0, 0)
+
+    Item { id: holder }
   }
 
   // ------------------------------------------------------------ surfaces
@@ -395,6 +414,40 @@ Scope {
 
         ListModel { id: frameModel }
 
+        // ---- card layout pass
+        property var cardSizes: ({})
+        property var placements: ({})
+
+        function reportCard(id, w, h) {
+          var old = cardSizes[id]
+          if (!(w > 0 && h > 0)) {
+            if (!old) return
+            var without = {}
+            for (var k in cardSizes) if (k !== id) without[k] = cardSizes[k]
+            cardSizes = without
+          } else {
+            if (old && old.w === w && old.h === h) return
+            var next = {}
+            for (var key in cardSizes) next[key] = cardSizes[key]
+            next[id] = { w: w, h: h }
+            cardSizes = next
+          }
+          Qt.callLater(win.placeAll)
+        }
+
+        readonly property var stripRect: strip.visible
+          ? { x: strip.x, y: strip.y, w: strip.width, h: strip.height } : null
+        onStripRectChanged: Qt.callLater(win.placeAll)
+        onLayoutChanged: Qt.callLater(win.placeAll)
+
+        function placeAll() {
+          placements = Model.placeCards(layout, cardSizes, stripRect ? [stripRect] : [], {
+            inset: Style.spacing.xl,
+            gap: Style.spacing.md,
+            screen: { w: win.width, h: win.height }
+          })
+        }
+
         onLiveLayoutChanged: {
           var signature = Model.signature(liveLayout)
           if (signature === layoutSignature) return
@@ -454,9 +507,12 @@ Scope {
             }
 
             // ---- active window: actions in the middle, edges on the edges
-            Card {
-              visible: frame.w.active
-              anchors.centerIn: parent
+            Placed {
+              host: win
+              cardId: frame.address + "|center"
+              wanted: frame.w.active
+              frameRect: frame.w
+              Card {
               PlainText {
                 text: (frame.w.appClass.length > 28 ? frame.w.appClass.slice(0, 27) + "…" : frame.w.appClass) + "  ·  " + (frame.w.fullscreen ? strings.t("state.fullscreen")
                   : frame.w.floating ? strings.t("state.floating")
@@ -475,54 +531,64 @@ Scope {
                   delegate: HintRow { required property var modelData; hint: modelData }
                 }
               }
+              }
             }
 
             Repeater {
               model: frame.w.active && !frame.w.fullscreen ? ["l", "r", "u", "d"] : []
-              delegate: EdgeCard {
+              delegate: Placed {
+                id: edge
                 required property var modelData
-                dir: modelData
-                box: frame.w
-                narrow: frame.w.w < 520
-                hints: frame.w.neighbors[modelData] ? root.edgeHints(modelData).slice(0, frame.compact ? 2 : 3)
+                readonly property var hints: frame.w.neighbors[modelData] ? root.edgeHints(modelData).slice(0, frame.compact ? 2 : 3)
                   : frame.w.monitorToward[modelData] ? root.monitorHints(modelData)
                   : []
+                host: win
+                cardId: frame.address + "|edge-" + modelData
+                wanted: hints.length > 0
+                frameRect: frame.w
+                EdgeCard { hints: edge.hints }
               }
             }
 
             // Resize keys hug the bottom-right corner, where the size changes.
-            Card {
-              visible: frame.w.active && !frame.w.floating && !frame.w.fullscreen && !frame.compact
-              anchors.right: parent.right
-              anchors.bottom: parent.bottom
-              anchors.rightMargin: Style.spacing.xl
-              anchors.bottomMargin: Style.spacing.xl
-                + (win.focused && frame.y + frame.height > win.height - win.stripClearance ? win.stripClearance : 0)
-              pad: Style.spacing.md
-              PlainText { text: strings.t("resize.title"); opacity: 0.7; font.pixelSize: Style.font.caption }
-              Repeater {
-                model: frame.w.active ? root.resizeHints() : []
-                delegate: HintRow { required property var modelData; hint: modelData }
+            // Optional: dropped when the window has no room left for them.
+            Placed {
+              host: win
+              cardId: frame.address + "|resize"
+              wanted: frame.w.active && !frame.w.floating && !frame.w.fullscreen
+              frameRect: frame.w
+              Card {
+                pad: Style.spacing.md
+                PlainText { text: strings.t("resize.title"); opacity: 0.7; font.pixelSize: Style.font.caption }
+                Repeater {
+                  model: frame.w.active ? root.resizeHints() : []
+                  delegate: HintRow { required property var modelData; hint: modelData }
+                }
               }
             }
 
             // Tabbed group controls sit along the top, where the tabs are.
-            Card {
-              visible: frame.w.active && frame.w.groupSize > 0
-              anchors.left: parent.left
-              anchors.top: parent.top
-              anchors.margins: Style.spacing.xl
-              pad: Style.spacing.md
-              Repeater {
-                model: frame.w.active && frame.w.groupSize > 0 ? root.groupHints() : []
-                delegate: HintRow { required property var modelData; hint: modelData }
+            Placed {
+              host: win
+              cardId: frame.address + "|group"
+              wanted: frame.w.active && frame.w.groupSize > 0
+              frameRect: frame.w
+              Card {
+                pad: Style.spacing.md
+                Repeater {
+                  model: frame.w.active && frame.w.groupSize > 0 ? root.groupHints() : []
+                  delegate: HintRow { required property var modelData; hint: modelData }
+                }
               }
             }
 
             // ---- neighbours: the arrow that reaches them from the active window
-            Column {
-              visible: frame.w.fromActive !== ""
-              anchors.centerIn: parent
+            Placed {
+              host: win
+              cardId: frame.address + "|target"
+              wanted: frame.w.fromActive !== ""
+              frameRect: frame.w
+              Column {
               spacing: Style.spacing.md
               PlainText {
                 anchors.horizontalCenter: parent.horizontalCenter
@@ -538,15 +604,20 @@ Scope {
                   delegate: HintRow { required property var modelData; hint: modelData }
                 }
               }
+              }
             }
 
             // Windows that are neither active nor next to it just get named.
-            PlainText {
-              visible: !frame.w.active && frame.w.fromActive === ""
-              anchors.centerIn: parent
-              text: frame.w.appClass
-              opacity: 0.7
-              font.pixelSize: Style.font.heading
+            Placed {
+              host: win
+              cardId: frame.address + "|name"
+              wanted: !frame.w.active && frame.w.fromActive === "" && frame.w.appClass !== ""
+              frameRect: frame.w
+              PlainText {
+                text: frame.w.appClass
+                opacity: 0.7
+                font.pixelSize: Style.font.heading
+              }
             }
           }
         }
@@ -566,9 +637,6 @@ Scope {
             delegate: HintRow { required property var modelData; hint: modelData }
           }
         }
-
-        // Room the workspace strip takes from the bottom of the screen.
-        readonly property int stripClearance: strip.height + Number(win.reserved[3] || 0) + Style.spacing.huge * 2
 
         // Workspace keys along the bottom of the focused monitor.
         Card {

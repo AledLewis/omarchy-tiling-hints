@@ -179,4 +179,64 @@ test("Super+arrow marks only the window Hyprland will pick", () => {
   // The edge itself still knows there are neighbours that way.
   assert.strictEqual(B2.build([active, chrome, term], mon, [mon], 0).find(w => w.active).neighbors.l, true)
 })
+
+const P = (() => { const c = {}; vm.runInNewContext(src + "\nthis.p = { placeCards, overlapArea };", c); return c.p })()
+function noOverlaps(places, sizes, obstacles) {
+  const rects = Object.keys(places).filter(id => !places[id].hidden)
+    .map(id => ({ id, x: places[id].x, y: places[id].y, w: sizes[id].w, h: sizes[id].h }))
+  for (let i = 0; i < rects.length; i++) {
+    for (let j = i + 1; j < rects.length; j++)
+      assert.strictEqual(P.overlapArea(rects[i], rects[j]), 0, rects[i].id + " overlaps " + rects[j].id)
+    for (const o of obstacles || []) assert.strictEqual(P.overlapArea(rects[i], o), 0, rects[i].id + " covers an obstacle")
+  }
+}
+
+test("cards in a narrow column stop colliding", () => {
+  // The Super+J case: active foot squeezed into a 294px column.
+  const layout = [{ address: "a", x: 1326, y: 38, w: 294, h: 1390, active: true }]
+  const sizes = { "a|center": { w: 160, h: 130 }, "a|edge-l": { w: 120, h: 80 }, "a|edge-r": { w: 120, h: 80 } }
+  const places = P.placeCards(layout, sizes, [], { inset: 10, gap: 6 })
+  noOverlaps(places, sizes)
+  // The action card keeps the middle; the edge cards stay on their own edges.
+  assert.strictEqual(places["a|center"].y, 38 + (1390 - 130) / 2)
+  assert.strictEqual(places["a|edge-l"].x, 1336)
+  assert.strictEqual(places["a|edge-r"].x, 1326 + 294 - 10 - 120)
+})
+
+test("a roomy window leaves everything where it wants to be", () => {
+  const layout = [{ address: "a", x: 0, y: 0, w: 2000, h: 1200, active: true }]
+  const sizes = { "a|center": { w: 400, h: 200 }, "a|edge-l": { w: 120, h: 80 }, "a|resize": { w: 120, h: 100 } }
+  const places = P.placeCards(layout, sizes, [], { inset: 10, gap: 6 })
+  eq(places["a|center"], { x: 800, y: 500, hidden: false })
+  eq(places["a|edge-l"], { x: 10, y: 560, hidden: false })
+  eq(places["a|resize"], { x: 2000 - 10 - 120, y: 1200 - 10 - 100, hidden: false })
+})
+
+test("cards dodge the workspace strip", () => {
+  const layout = [{ address: "a", x: 0, y: 0, w: 1300, h: 1400, active: true }]
+  const strip = { x: 760, y: 1330, w: 1040, h: 40 }
+  const sizes = { "a|resize": { w: 140, h: 100 }, "a|edge-d": { w: 400, h: 60 } }
+  const places = P.placeCards(layout, sizes, [strip], { inset: 10, gap: 6 })
+  noOverlaps(places, sizes, [strip])
+  assert.strictEqual(places["a|resize"].hidden, false)
+})
+
+test("optional cards give way when there is no room", () => {
+  const layout = [{ address: "a", x: 0, y: 0, w: 300, h: 260, active: true }]
+  const sizes = { "a|center": { w: 260, h: 200 }, "a|resize": { w: 140, h: 100 } }
+  const places = P.placeCards(layout, sizes, [], { inset: 10, gap: 6 })
+  assert.strictEqual(places["a|center"].hidden, false)
+  assert.strictEqual(places["a|resize"].hidden, true)
+})
+
+test("a card bigger than its window spills evenly and keeps out of the others", () => {
+  const layout = [
+    { address: "a", x: 0, y: 0, w: 100, h: 1000, active: true },
+    { address: "b", x: 110, y: 0, w: 900, h: 1000, active: false }
+  ]
+  const sizes = { "a|center": { w: 160, h: 130 }, "b|target": { w: 200, h: 180 } }
+  const places = P.placeCards(layout, sizes, [], { inset: 10, gap: 6 })
+  noOverlaps(places, sizes)
+  assert.strictEqual(places["a|center"].x, -30)
+})
 console.log(`${passed} passed`)

@@ -377,3 +377,131 @@ function signature(layout) {
       w.monitorToward.l, w.monitorToward.r, w.monitorToward.u, w.monitorToward.d, w.appClass].join(",")
   }).join("|")
 }
+
+// ------------------------------------------------------------ card placement
+//
+// Every hint card wants a spot inside its window (an edge card hugs its edge,
+// the action card sits in the middle, ...). Cards are placed one at a time,
+// most important first, each at the free spot closest to where it wants to
+// be. A card that cannot fit anywhere without overlapping is either dropped
+// (optional cards) or put where it overlaps least (essential ones).
+//
+// Card ids are "<window address>|<role>". Rects are in screen coordinates.
+
+var ROLES = {
+  center:   { h: "c", v: "c", priority: 1, optional: false },
+  target:   { h: "c", v: "c", priority: 2, optional: false },
+  "edge-l": { h: "s", v: "c", priority: 3, optional: false, along: "y" },
+  "edge-r": { h: "e", v: "c", priority: 3, optional: false, along: "y" },
+  "edge-u": { h: "c", v: "s", priority: 3, optional: false, along: "x" },
+  "edge-d": { h: "c", v: "e", priority: 3, optional: false, along: "x" },
+  group:    { h: "s", v: "s", priority: 4, optional: true },
+  resize:   { h: "e", v: "e", priority: 5, optional: true },
+  name:     { h: "c", v: "c", priority: 6, optional: true }
+}
+
+function roleOf(id) {
+  var at = String(id).lastIndexOf("|")
+  return at < 0 ? "" : String(id).slice(at + 1)
+}
+
+function addressOf(id) {
+  var at = String(id).lastIndexOf("|")
+  return at < 0 ? "" : String(id).slice(0, at)
+}
+
+function overlapArea(a, b) {
+  var w = overlap(a.x, a.x + a.w, b.x, b.x + b.w)
+  var h = overlap(a.y, a.y + a.h, b.y, b.y + b.h)
+  return w > 0 && h > 0 ? w * h : 0
+}
+
+function alignedStart(start, span, size, how) {
+  if (how === "s") return start
+  if (how === "e") return start + span - size
+  return start + (span - size) / 2
+}
+
+// layout:    windows from build() (x, y, w, h, address, active)
+// sizes:     { id: { w, h } } — measured cards that want to be shown
+// obstacles: fixed rects nothing may cover (the workspace strip)
+// options:   { inset, gap, screen: { w, h } }
+// Returns { id: { x, y, hidden } } with x, y in screen coordinates.
+function placeCards(layout, sizes, obstacles, options) {
+  var opts = options || {}
+  var inset = opts.inset === undefined ? 10 : opts.inset
+  var gap = opts.gap === undefined ? 6 : opts.gap
+  var screen = opts.screen || null
+
+  var frames = {}
+  ;(layout || []).forEach(function(w) { frames[w.address] = w })
+
+  var cards = []
+  for (var id in sizes) {
+    var size = sizes[id], role = ROLES[roleOf(id)], frame = frames[addressOf(id)]
+    if (!size || !role || !frame || !(size.w > 0) || !(size.h > 0)) continue
+    cards.push({ id: id, w: size.w, h: size.h, role: role, frame: frame })
+  }
+  // Most important first; the active window's cards before a neighbour's.
+  cards.sort(function(a, b) {
+    return (a.role.priority - b.role.priority)
+      || ((b.frame.active ? 1 : 0) - (a.frame.active ? 1 : 0))
+      || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+  })
+
+  // Placed rects are padded by `gap` so cards never touch.
+  var placed = (obstacles || []).filter(function(o) { return o && o.w > 0 && o.h > 0 })
+    .map(function(o) { return { x: o.x - gap, y: o.y - gap, w: o.w + gap * 2, h: o.h + gap * 2 } })
+  var out = {}
+
+  cards.forEach(function(card) {
+    var f = card.frame
+    // Where the card may go: inside its window, short of the border.
+    var left = f.x + inset, top = f.y + inset, spanW = f.w - inset * 2, spanH = f.h - inset * 2
+    // Too big for its window: centre it on that axis and let it spill.
+    var fixedX = card.w > spanW, fixedY = card.h > spanH
+    var px = fixedX ? alignedStart(f.x, f.w, card.w, "c") : alignedStart(left, spanW, card.w, card.role.h)
+    var py = fixedY ? alignedStart(f.y, f.h, card.h, "c") : alignedStart(top, spanH, card.h, card.role.v)
+    if (screen) {
+      px = Math.max(0, Math.min(px, screen.w - card.w))
+      py = Math.max(0, Math.min(py, screen.h - card.h))
+    }
+
+    // Candidate spots: the preferred one, the window's own edges, and
+    // flush against every card placed so far.
+    var xs = [px], ys = [py]
+    if (!fixedX) xs.push(left, left + spanW - card.w)
+    if (!fixedY) ys.push(top, top + spanH - card.h)
+    placed.forEach(function(p) {
+      if (!fixedX) xs.push(p.x - card.w, p.x + p.w)
+      if (!fixedY) ys.push(p.y - card.h, p.y + p.h)
+    })
+
+    // An edge card should slide along its edge before leaving it.
+    var along = card.role.along
+    var best = null
+    for (var i = 0; i < xs.length; i++) {
+      for (var j = 0; j < ys.length; j++) {
+        var x = xs[i], y = ys[j]
+        if (!fixedX && (x < left - 0.5 || x + card.w > left + spanW + 0.5)) continue
+        if (!fixedY && (y < top - 0.5 || y + card.h > top + spanH + 0.5)) continue
+        var rect = { x: x, y: y, w: card.w, h: card.h }
+        var covered = 0
+        for (var k = 0; k < placed.length; k++) covered += overlapArea(rect, placed[k])
+        var dx = Math.abs(x - px), dy = Math.abs(y - py)
+        var distance = along === "y" ? dx * 4 + dy : along === "x" ? dx + dy * 4 : dx + dy
+        if (!best || covered < best.covered || (covered === best.covered && distance < best.distance))
+          best = { x: x, y: y, covered: covered, distance: distance }
+      }
+    }
+    if (!best) best = { x: px, y: py, covered: 1 }
+
+    if (best.covered > 0 && card.role.optional) {
+      out[card.id] = { x: px, y: py, hidden: true }
+      return
+    }
+    out[card.id] = { x: best.x, y: best.y, hidden: false }
+    placed.push({ x: best.x - gap, y: best.y - gap, w: card.w + gap * 2, h: card.h + gap * 2 })
+  })
+  return out
+}
