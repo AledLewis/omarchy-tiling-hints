@@ -75,11 +75,32 @@ Scope {
     onTriggered: { Hyprland.refreshToplevels(); Hyprland.refreshMonitors() }
   }
 
+  // Some layout changes emit no Hyprland event at all (Super+J's togglesplit),
+  // so poll window geometry while the overlay is up. One IPC request per tick,
+  // and the frames only rebuild when something actually moved.
+  Timer {
+    interval: 50
+    repeat: true
+    running: root.opened
+    onTriggered: Hyprland.refreshToplevels()
+  }
+
+  // Hyprland's own window-move animation, so frames slide with their windows.
+  property var moveAnimation: ({ duration: 0, bezier: [0.23, 1, 0.32, 1] })
+
+  Process {
+    id: animationsProc
+    command: ["hyprctl", "animations", "-j"]
+    stdout: StdioCollector {
+      onStreamFinished: root.moveAnimation = Model.windowMoveAnimation(this.text)
+    }
+  }
+
   Connections {
     target: Hyprland
     function onRawEvent(event) {
       var name = event ? String(event.name) : ""
-      if (name === "configreloaded") bindsProc.running = true
+      if (name === "configreloaded") { bindsProc.running = true; animationsProc.running = true }
       if (root.held) refreshDebounce.restart()
     }
   }
@@ -92,7 +113,7 @@ Scope {
     }
   }
 
-  Component.onCompleted: bindsProc.running = true
+  Component.onCompleted: { bindsProc.running = true; animationsProc.running = true }
 
   ShellIpc {
     target: "tiling-hints"
@@ -129,10 +150,10 @@ Scope {
 
   function windowHints(win, compact) {
     var all = [
-      { desc: "Close window", label: strings.t("action.close") },
-      { desc: "Toggle window floating/tiling", label: win.floating ? strings.t("action.tile") : strings.t("action.float") },
-      { desc: "Full screen", label: strings.t("action.fullscreen") },
-      { desc: "Toggle window split", label: strings.t("action.split"), tiledOnly: true },
+      { desc: "Close window", label: strings.t("action.close"), core: true },
+      { desc: "Toggle window floating/tiling", label: win.floating ? strings.t("action.tile") : strings.t("action.float"), core: true },
+      { desc: "Full screen", label: strings.t("action.fullscreen"), core: true },
+      { desc: "Toggle window split", label: strings.t("action.split"), tiledOnly: true, core: true },
       { desc: "Tiled full screen", label: strings.t("action.tiledFullscreen"), full: true },
       { desc: "Full width", label: strings.t("action.fullWidth"), full: true },
       { desc: "Pseudo window", label: strings.t("action.pseudo"), tiledOnly: true, full: true },
@@ -144,7 +165,8 @@ Scope {
     ]
     var picked = all.filter(function(h) {
       if (h.tiledOnly && win.floating) return false
-      if (compact && h.full) return false
+      // A small window keeps just the four actions people reach for most.
+      if (compact && !h.core) return false
       return true
     })
     return Model.resolve(picked, binds)
@@ -195,6 +217,19 @@ Scope {
   }
 
   // ------------------------------------------------------------ pieces
+
+  readonly property var emptyWindow: ({
+    address: "", x: 0, y: 0, w: 0, h: 0, active: false, floating: false, fullscreen: 0, groupSize: 0,
+    appClass: "", fromActive: "", neighbors: { l: false, r: false, u: false, d: false },
+    monitorToward: { l: false, r: false, u: false, d: false }
+  })
+
+  // Matches Hyprland's window-move animation curve and length.
+  component FrameMotion: NumberAnimation {
+    duration: root.moveAnimation.duration
+    easing.type: Easing.Bezier
+    easing.bezierCurve: root.moveAnimation.bezier.concat([1, 1])
+  }
 
   component PlainText: Text {
     textFormat: Text.PlainText
@@ -266,13 +301,16 @@ Scope {
     property var hints: []
     property var box: ({ w: 0, h: 0 })
     property int inset: Style.spacing.xl
+    // In a narrow column the left and right cards would collide with each
+    // other and the action card, so stagger them above and below it.
+    property bool narrow: false
     visible: hints.length > 0
     x: dir === "l" ? inset
       : dir === "r" ? box.w - width - inset
       : (box.w - width) / 2
     y: dir === "u" ? inset
       : dir === "d" ? box.h - height - inset
-      : (box.h - height) / 2
+      : (box.h - height) / 2 + (narrow ? (dir === "l" ? -1 : 1) * box.h / 4 : 0)
     Repeater {
       model: hints
       delegate: HintRow { required property var modelData; hint: modelData }
@@ -310,7 +348,7 @@ Scope {
           return { x: Number(ipc.x || 0), y: Number(ipc.y || 0), w: rotated ? h : w, h: rotated ? w : h }
         }
 
-        readonly property var layout: {
+        readonly property var liveLayout: {
           if (!root.opened || !monitor) return []
           var active = Hyprland.activeToplevel
           var activeAddress = active ? "0x" + String(active.address).replace(/^0x/, "") : ""
@@ -330,6 +368,35 @@ Scope {
           return Model.build(windows, monitorIpc ? logicalRect(monitorIpc) : null, monitors)
         }
 
+        // What is drawn. liveLayout re-evaluates on every poll; this only
+        // changes when the windows do, and frames are keyed by address so a
+        // moved window's frame animates rather than being rebuilt.
+        property var layout: []
+        property string layoutSignature: ""
+        readonly property var byAddress: {
+          var map = {}
+          for (var i = 0; i < layout.length; i++) map[layout[i].address] = layout[i]
+          return map
+        }
+
+        ListModel { id: frameModel }
+
+        onLiveLayoutChanged: {
+          var signature = Model.signature(liveLayout)
+          if (signature === layoutSignature) return
+          layoutSignature = signature
+          var next = liveLayout
+          var wanted = {}
+          for (var i = 0; i < next.length; i++) wanted[next[i].address] = true
+          for (var j = frameModel.count - 1; j >= 0; j--)
+            if (!wanted[frameModel.get(j).address]) frameModel.remove(j)
+          layout = next
+          var have = {}
+          for (var k = 0; k < frameModel.count; k++) have[frameModel.get(k).address] = true
+          for (var m = 0; m < next.length; m++)
+            if (!have[next[m].address]) frameModel.append({ address: next[m].address })
+        }
+
         readonly property var reserved: monitorIpc && monitorIpc.reserved ? monitorIpc.reserved : [0, 0, 0, 0]
 
         visible: root.opened && !!monitor
@@ -343,18 +410,25 @@ Scope {
         mask: Region {}
 
         Repeater {
-          model: win.layout
+          model: frameModel
 
           delegate: Item {
             id: frame
-            required property var modelData
-            readonly property var w: modelData
+            required property string address
+            readonly property var w: win.byAddress[address] || root.emptyWindow
             readonly property bool compact: w.w < 520 || w.h < 380
 
+            // The active window's chips sit above its neighbours'.
+            z: w.active ? 1 : 0
             x: w.x
             y: w.y
             width: w.w
             height: w.h
+
+            Behavior on x { FrameMotion {} }
+            Behavior on y { FrameMotion {} }
+            Behavior on width { FrameMotion {} }
+            Behavior on height { FrameMotion {} }
 
             // Frame wash and border: the active window in the accent, the rest muted.
             Rectangle {
@@ -395,7 +469,8 @@ Scope {
                 required property var modelData
                 dir: modelData
                 box: frame.w
-                hints: frame.w.neighbors[modelData] ? root.edgeHints(modelData)
+                narrow: frame.w.w < 520
+                hints: frame.w.neighbors[modelData] ? root.edgeHints(modelData).slice(0, frame.compact ? 2 : 3)
                   : frame.w.monitorToward[modelData] ? root.monitorHints(modelData)
                   : []
               }

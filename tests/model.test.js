@@ -138,3 +138,26 @@ test("parses omarchy's printed keybindings", () => {
   eq(rangeHint(idx, "Move window to workspace 1", "Move window to workspace 10", "s").keys, ["Shift", "1…0"])
 })
 console.log(`${passed} passed`)
+
+const A = (() => { const c = {}; vm.runInNewContext(src + "\nthis.a = { windowMoveAnimation, signature, build };", c); return c.a })()
+test("window move animation follows Hyprland's tree", () => {
+  const beziers = [{ name: "easeOutQuint", X0: 0.23, Y0: 1, X1: 0.32, Y1: 1 }, { name: "default", X0: 0, Y0: 0.75, X1: 0.15, Y1: 1 }]
+  const live = [[
+    { name: "global", overridden: true, bezier: "default", enabled: true, speed: 10 },
+    { name: "windows", overridden: true, bezier: "easeOutQuint", enabled: true, speed: 3.79 },
+    { name: "windowsMove", overridden: false, bezier: "", enabled: true, speed: 0 }
+  ], beziers]
+  eq(A.windowMoveAnimation(JSON.stringify(live)), { duration: 379, bezier: [0.23, 1, 0.32, 1] })
+  const own = JSON.parse(JSON.stringify(live)); own[0][2] = { name: "windowsMove", overridden: true, bezier: "default", enabled: true, speed: 2 }
+  eq(A.windowMoveAnimation(own), { duration: 200, bezier: [0, 0.75, 0.15, 1] })
+  const off = JSON.parse(JSON.stringify(live)); off[0][1].enabled = false
+  assert.strictEqual(A.windowMoveAnimation(off).duration, 0)
+  assert.strictEqual(A.windowMoveAnimation("nope").duration, 0)
+})
+
+test("signature ignores identity, tracks geometry", () => {
+  const mk = x => A.build([win(x, 40, 1260, 1390, { active: true })], mon, [mon])
+  assert.strictEqual(A.signature(mk(10)), A.signature(mk(10)))
+  assert.notStrictEqual(A.signature(mk(10)), A.signature(mk(20)))
+})
+console.log(`${passed} passed`)

@@ -303,3 +303,51 @@ function parsePrinted(text) {
   for (var d in best) out[d] = best[d].caps
   return out
 }
+
+// ------------------------------------------------------------ animation
+//
+// Hyprland reports a window's final geometry the moment a layout change
+// starts, then animates the window there. The overlay animates its frames
+// the same way, using Hyprland's own `windowsMove` animation as resolved
+// through its tree (windowsMove -> windows -> global) from
+// `hyprctl animations -j`: [ [animations], [beziers] ].
+
+var ANIMATION_PARENTS = { windowsMove: "windows", windows: "global" }
+
+function windowMoveAnimation(json) {
+  var fallback = { duration: 0, bezier: [0.23, 1, 0.32, 1] }
+  var data
+  try { data = typeof json === "string" ? JSON.parse(json) : json } catch (e) { return fallback }
+  if (!Array.isArray(data) || !Array.isArray(data[0])) return fallback
+  var anims = {}, curves = {}
+  data[0].forEach(function(a) { if (a && a.name) anims[a.name] = a })
+  ;(Array.isArray(data[1]) ? data[1] : []).forEach(function(c) { if (c && c.name) curves[c.name] = c })
+
+  // Walk up until an animation that is actually configured.
+  var name = "windowsMove", speed = null, bezier = "", enabled = true
+  while (name) {
+    var a = anims[name]
+    if (a && (a.overridden || name === "global")) {
+      if (a.enabled === false) enabled = false
+      if (speed === null) speed = Number(a.speed)
+      if (!bezier && a.bezier) bezier = String(a.bezier)
+      break
+    }
+    name = ANIMATION_PARENTS[name]
+  }
+  if (!enabled || !(speed > 0)) return { duration: 0, bezier: fallback.bezier }
+  var c = curves[bezier || "default"]
+  var points = c ? [Number(c.X0), Number(c.Y0), Number(c.X1), Number(c.Y1)] : fallback.bezier
+  // Hyprland speed is in deciseconds.
+  return { duration: Math.round(speed * 100), bezier: points }
+}
+
+// A string that changes only when something drawn changes, so a 20 Hz
+// refresh does not rebuild every hint while nothing moves.
+function signature(layout) {
+  return (layout || []).map(function(w) {
+    return [w.address, w.x, w.y, w.w, w.h, w.active ? 1 : 0, w.floating ? 1 : 0, w.fullscreen, w.groupSize,
+      w.fromActive, w.neighbors.l, w.neighbors.r, w.neighbors.u, w.neighbors.d,
+      w.monitorToward.l, w.monitorToward.r, w.monitorToward.u, w.monitorToward.d, w.appClass].join(",")
+  }).join("|")
+}
