@@ -1,0 +1,51 @@
+{
+  "edge.focus": "focus",
+  "edge.swap": "swap",
+  "edge.group": "join group",
+  "edge.windowToMonitor": "window to monitor",
+  "edge.workspaceToMonitor": "workspace to monitor",
+
+  "action.close": "close",
+  "action.float": "float",
+  "action.tile": "tile",
+  "action.fullscreen": "fullscreen",
+  "action.split": "flip split",
+  "action.tiledFullscreen": "tiled fullscreen",
+  "action.fullWidth": "full width",
+  "action.pseudo": "pseudotile",
+  "action.pop": "pop out & pin",
+  "action.group": "make group",
+  "action.ungroupAll": "dissolve group",
+  "action.minimize": "minimize",
+  "action.toScratchpad": "to scratchpad",
+  "action.transparency": "transparency",
+
+  "resize.title": "RESIZE",
+  "resize.narrower": "narrower",
+  "resize.wider": "wider",
+  "resize.shorter": "shorter",
+  "resize.taller": "taller",
+
+  "group.next": "next tab",
+  "group.leave": "leave group",
+  "group.pick": "pick tab",
+
+  "state.tiled": "tiled",
+  "state.floating": "floating",
+  "state.fullscreen": "fullscreen",
+  "state.grouped": "group of %1",
+
+  "strip.workspace": "workspace",
+  "strip.sendWindow": "send window",
+  "strip.nextWorkspace": "next",
+  "strip.formerWorkspace": "last",
+  "strip.scratchpad": "scratchpad",
+  "strip.layout": "layout",
+  "strip.dragMove": "move",
+  "strip.dragResize": "resize",
+  "strip.allKeys": "all keys",
+
+  "empty.title": "Empty workspace",
+  "empty.terminal": "terminal",
+  "empty.menu": "menu"
+}

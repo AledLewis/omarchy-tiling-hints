@@ -1,0 +1,140 @@
+// Run: node tests/model.test.js
+const fs = require("fs")
+const path = require("path")
+const assert = require("assert")
+const vm = require("vm")
+
+const src = fs.readFileSync(path.join(__dirname, "..", "HintsModel.js"), "utf8").replace(/^\.pragma library\s*$/m, "")
+const M = {}
+vm.runInNewContext(src + "\nthis.M = { build, normalizeClient, isAdjacent, parseBinds, resolve, rangeHint, keycaps, monitorToward, arrow };", M)
+const { build, normalizeClient, parseBinds, resolve, rangeHint, keycaps, monitorToward } = M.M
+
+const eq = (a, b, m) => assert.deepStrictEqual(JSON.parse(JSON.stringify(a)), b, m)
+let passed = 0
+function test(name, fn) { fn(); passed++; console.log("ok -", name) }
+const win = (x, y, w, h, extra) => Object.assign({ address: "0x" + x + y, x, y, w, h, floating: false, fullscreen: 0, groupSize: 0, appClass: "app", active: false }, extra)
+const mon = { x: 0, y: 0, w: 2560, h: 1440 }
+
+test("two side-by-side windows see each other", () => {
+  const a = win(10, 40, 1260, 1390, { active: true }), b = win(1290, 40, 1260, 1390)
+  const out = build([a, b], mon, [mon])
+  const A = out.find(w => w.active), B = out.find(w => !w.active)
+  eq(A.neighbors, { l: false, r: true, u: false, d: false })
+  eq(B.neighbors, { l: true, r: false, u: false, d: false })
+  assert.strictEqual(B.fromActive, "r")
+  assert.strictEqual(out[out.length - 1].active, true, "active drawn last")
+})
+
+test("dwindle: right column split top/bottom", () => {
+  const a = win(10, 40, 1260, 1390, { active: true })
+  const b = win(1290, 40, 1260, 685), c = win(1290, 745, 1260, 685)
+  const out = build([a, b, c], mon, [mon])
+  const B = out.find(w => w.address === b.address), C = out.find(w => w.address === c.address)
+  assert.strictEqual(B.fromActive, "r")
+  assert.strictEqual(C.fromActive, "r")
+  assert.strictEqual(B.neighbors.d, true)
+  assert.strictEqual(C.neighbors.u, true)
+  assert.strictEqual(B.neighbors.l, true)
+})
+
+test("floating windows get no neighbours and are not neighbours", () => {
+  const a = win(10, 40, 1260, 1390, { active: true }), f = win(1290, 40, 600, 400, { floating: true })
+  const out = build([a, f], mon, [mon])
+  assert.strictEqual(out.find(w => w.active).neighbors.r, false)
+  assert.strictEqual(out.find(w => w.floating).fromActive, "")
+})
+
+test("monitor to the right is offered when no window is there", () => {
+  const right = { x: 2560, y: 0, w: 1920, h: 1080 }
+  assert.strictEqual(monitorToward(mon, [mon, right], "r"), true)
+  assert.strictEqual(monitorToward(mon, [mon, right], "l"), false)
+  const out = build([win(10, 40, 2540, 1390, { active: true })], mon, [mon, right])
+  assert.strictEqual(out[0].monitorToward.r, true)
+  assert.strictEqual(out[0].monitorToward.l, false)
+})
+
+test("fullscreen hides everything else", () => {
+  const out = build([win(0, 0, 2560, 1440, { fullscreen: 2 }), win(10, 40, 100, 100, { active: true })], mon, [mon])
+  assert.strictEqual(out.length, 1)
+  assert.strictEqual(out[0].fullscreen, 2)
+})
+
+test("normalizeClient offsets by monitor and flags active", () => {
+  const n = normalizeClient({ address: "0xabc", at: [2570, 30], size: [800, 600], floating: false, fullscreen: 0, grouped: ["0xabc", "0xdef"], class: "foot" }, 2560, 0, "0xabc")
+  eq([n.x, n.y, n.w, n.h, n.active, n.groupSize, n.appClass], [10, 30, 800, 600, true, 2, "foot"])
+  assert.strictEqual(normalizeClient({ at: [0, 0], size: [10, 10], focusHistoryID: 0 }, 0, 0, "").active, true)
+  assert.strictEqual(normalizeClient({ at: [0, 0], size: [10, 10], focusHistoryID: 0, address: "0x1" }, 0, 0, "0x2").active, false)
+  assert.strictEqual(normalizeClient({ at: [0, 0], size: [0, 0] }), null)
+  assert.strictEqual(normalizeClient({ at: [0, 0], size: [10, 10], hidden: true }), null)
+})
+
+test("binds become keycaps, Super stripped, fewest modifiers preferred", () => {
+  const binds = [
+    { modmask: 64, key: "W", description: "Close window" },
+    { modmask: 64, key: "Q", description: "Close window" },
+    { modmask: 65, key: "LEFT", description: "Swap window to the left" },
+    { modmask: 64, key: "", keycode: 10, description: "Switch to workspace 1" },
+    { modmask: 64, key: "", keycode: 19, description: "Switch to workspace 10" },
+    { modmask: 65, key: "", keycode: 10, description: "Move window to workspace 1" },
+    { modmask: 65, key: "", keycode: 19, description: "Move window to workspace 10" },
+    { modmask: 64, key: "", keycode: 20, description: "Expand window left" },
+    { modmask: 64, key: "mouse:272", description: "Move window" },
+    { modmask: 8, key: "TAB", description: "Not a super bind" },
+    { modmask: 72, key: "TAB", description: "Next window in group" },
+    { modmask: 76, key: "TAB", description: "Next window in group" }
+  ]
+  const idx = parseBinds(JSON.stringify(binds))
+  eq(idx["Close window"], ["W"])
+  eq(idx["Swap window to the left"], ["Shift", "←"])
+  eq(idx["Expand window left"], ["-"])
+  eq(idx["Move window"], ["Left drag"])
+  eq(idx["Next window in group"], ["Alt", "Tab"])
+  assert.strictEqual(idx["Not a super bind"], undefined)
+  eq(rangeHint(idx, "Switch to workspace 1", "Switch to workspace 10", "ws").keys, ["1…0"])
+  eq(rangeHint(idx, "Move window to workspace 1", "Move window to workspace 10", "send").keys, ["Shift", "1…0"])
+  assert.strictEqual(rangeHint(idx, "Nope 1", "Nope 10", "x"), null)
+})
+
+test("resolve drops unbound actions and keeps order", () => {
+  const idx = { "Close window": ["W"], "Full screen": ["F"] }
+  const out = resolve([{ desc: "Full screen", label: "fs" }, { desc: "Gone", label: "x" }, { desc: ["Gone", "Close window"], label: "close" }], idx)
+  eq(out, [{ keys: ["F"], label: "fs" }, { keys: ["W"], label: "close" }])
+})
+
+test("garbage bind JSON is harmless", () => {
+  eq(parseBinds("not json"), {})
+  eq(keycaps({ modmask: 5, key: "grave" }), ["Shift", "Ctrl", "`"])
+})
+
+console.log(`\n${passed} passed`)
+
+const { parsePrinted } = (() => { const c = {}; vm.runInNewContext(src + "\nthis.p = { parsePrinted };", c); return c.p })()
+test("parses omarchy's printed keybindings", () => {
+  const idx = parsePrinted([
+    "SUPER + W / SUPER + Q               → Close window",
+    "SUPER + 1                           → Switch to workspace 1",
+    "SUPER + 0                           → Switch to workspace 10",
+    "SUPER SHIFT + 1                     → Move window to workspace 1",
+    "SUPER SHIFT + 0                     → Move window to workspace 10",
+    "SUPER SHIFT + LEFT                  → Swap window to the left",
+    "SUPER + MINUS                       → Expand window left",
+    "SUPER SHIFT + MINUS                 → Shrink window up",
+    "SUPER + LEFT MOUSE BUTTON           → Move window",
+    "SUPER ALT + mouse_down              → Next window in group",
+    "SUPER ALT + TAB                     → Next window in group",
+    "SUPER + ~                           → Toggle Quake console",
+    "ALT + TAB                           → Focus on next window",
+    "garbage line"
+  ].join("\n"))
+  eq(idx["Close window"], ["W"])
+  eq(idx["Swap window to the left"], ["Shift", "←"])
+  eq(idx["Expand window left"], ["-"])
+  eq(idx["Shrink window up"], ["Shift", "-"])
+  eq(idx["Move window"], ["Left drag"])
+  eq(idx["Next window in group"], ["Alt", "Tab"])
+  eq(idx["Toggle Quake console"], ["~"])
+  assert.strictEqual(idx["Focus on next window"], undefined)
+  eq(rangeHint(idx, "Switch to workspace 1", "Switch to workspace 10", "ws").keys, ["1…0"])
+  eq(rangeHint(idx, "Move window to workspace 1", "Move window to workspace 10", "s").keys, ["Shift", "1…0"])
+})
+console.log(`${passed} passed`)
