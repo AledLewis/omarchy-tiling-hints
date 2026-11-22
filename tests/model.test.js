@@ -30,8 +30,8 @@ test("dwindle: right column split top/bottom", () => {
   const b = win(1290, 40, 1260, 685), c = win(1290, 745, 1260, 685)
   const out = build([a, b, c], mon, [mon])
   const B = out.find(w => w.address === b.address), C = out.find(w => w.address === c.address)
-  assert.strictEqual(B.fromActive, "r")
-  assert.strictEqual(C.fromActive, "r")
+  // Both touch the right edge, but Super+→ reaches only one.
+  assert.strictEqual([B.fromActive, C.fromActive].filter(d => d === "r").length, 1)
   assert.strictEqual(B.neighbors.d, true)
   assert.strictEqual(C.neighbors.u, true)
   assert.strictEqual(B.neighbors.l, true)
@@ -159,5 +159,24 @@ test("signature ignores identity, tracks geometry", () => {
   const mk = x => A.build([win(x, 40, 1260, 1390, { active: true })], mon, [mon])
   assert.strictEqual(A.signature(mk(10)), A.signature(mk(10)))
   assert.notStrictEqual(A.signature(mk(10)), A.signature(mk(20)))
+})
+console.log(`${passed} passed`)
+
+const B2 = (() => { const c = {}; vm.runInNewContext(src + "\nthis.b = { build };", c); return c.b })()
+test("Super+arrow marks only the window Hyprland will pick", () => {
+  // The live case: foot focused, chrome above-left (focused 1 ago), terminal below-left (2 ago).
+  const active = win(1326, 38, 294, 1390, { active: true, focusHistory: 0 })
+  const chrome = win(12, 38, 1300, 900, { address: "chrome", focusHistory: 1 })
+  const term = win(12, 952, 1300, 476, { address: "term", focusHistory: 2 })
+  const pick = (method, a, b) => {
+    const out = B2.build([active, a, b], mon, [mon], method)
+    return out.filter(w => w.fromActive === "l").map(w => w.address)
+  }
+  eq(pick(0, chrome, term), ["chrome"])
+  eq(pick(0, Object.assign({}, chrome, { focusHistory: 3 }), term), ["term"])
+  // Longest shared edge: chrome overlaps 900px, the terminal 476px.
+  eq(pick(1, Object.assign({}, chrome, { focusHistory: 3 }), term), ["chrome"])
+  // The edge itself still knows there are neighbours that way.
+  assert.strictEqual(B2.build([active, chrome, term], mon, [mon], 0).find(w => w.active).neighbors.l, true)
 })
 console.log(`${passed} passed`)

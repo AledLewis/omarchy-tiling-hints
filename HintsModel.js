@@ -66,6 +66,8 @@ function normalizeClient(ipc, monitorX, monitorY, activeAddress) {
     pinned: !!ipc.pinned,
     groupSize: grouped > 1 ? grouped : 0,
     appClass: String(ipc.class || ""),
+    // 0 is the focused window, 1 the one before it, and so on.
+    focusHistory: ipc.focusHistoryID === undefined ? 1e6 : Number(ipc.focusHistoryID),
     // Quickshell only learns the active window from a focus event, so right
     // after a shell restart fall back to Hyprland's focus history.
     active: activeAddress ? address === activeAddress : Number(ipc.focusHistoryID) === 0
@@ -80,13 +82,39 @@ function normalizeClient(ipc, monitorX, monitorY, activeAddress) {
 //   neighbors        { l, r, u, d } — a tiled window sits right beside it
 //   monitorToward    { l, r, u, d } — no neighbor, but another monitor lies that way
 //   fromActive       "l"|"r"|"u"|"d"|"" — the key that focuses it from the active window
-function build(windows, monitor, monitors) {
+//
+// Several windows can touch one edge of the active window, but Super+arrow
+// reaches only one of them. Hyprland picks it by `binds:focus_preferred_method`:
+// 0 (default) the most recently focused, 1 the longest shared edge.
+// The one window Super+arrow `dir` moves to from `from`, as Hyprland chooses.
+function directionTarget(from, candidates, dir, focusMethod) {
+  var best = null, bestLength = -1
+  for (var i = 0; i < candidates.length; i++) {
+    var c = candidates[i]
+    if (c === from || !isAdjacent(from, c, dir)) continue
+    var length = dir === "l" || dir === "r"
+      ? overlap(from.y, from.y + from.h, c.y, c.y + c.h)
+      : overlap(from.x, from.x + from.w, c.x, c.x + c.w)
+    var better
+    if (Number(focusMethod) === 1) better = length > bestLength || (length === bestLength && best && c.focusHistory < best.focusHistory)
+    else better = !best || c.focusHistory < best.focusHistory
+    if (better) { best = c; bestLength = length }
+  }
+  return best
+}
+
+function build(windows, monitor, monitors, focusMethod) {
   var list = (windows || []).filter(function(w) { return !!w })
   var tiled = list.filter(function(w) { return !w.floating })
   var active = null
   for (var i = 0; i < list.length; i++) if (list[i].active) active = list[i]
 
   var anyFullscreen = list.some(function(w) { return w.fullscreen >= 1 })
+
+  var targets = {}
+  if (active && !active.floating) {
+    for (var t = 0; t < DIRECTIONS.length; t++) targets[DIRECTIONS[t]] = directionTarget(active, tiled, DIRECTIONS[t], focusMethod)
+  }
 
   var out = list.map(function(w) {
     var neighbors = { l: false, r: false, u: false, d: false }
@@ -103,10 +131,8 @@ function build(windows, monitor, monitors) {
     }
 
     var fromActive = ""
-    if (active && active !== w && !active.floating && !w.floating) {
-      for (var k = 0; k < DIRECTIONS.length; k++) {
-        if (isAdjacent(active, w, DIRECTIONS[k])) { fromActive = DIRECTIONS[k]; break }
-      }
+    for (var k = 0; k < DIRECTIONS.length; k++) {
+      if (targets[DIRECTIONS[k]] === w) { fromActive = DIRECTIONS[k]; break }
     }
 
     var copy = {}

@@ -85,6 +85,20 @@ Scope {
     onTriggered: Hyprland.refreshToplevels()
   }
 
+  // How Hyprland picks between several windows on one side of the active one:
+  // 0 most recently focused, 1 longest shared edge.
+  property int focusMethod: 0
+
+  Process {
+    id: focusMethodProc
+    command: ["hyprctl", "getoption", "binds:focus_preferred_method", "-j"]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try { root.focusMethod = Number(JSON.parse(this.text).int) || 0 } catch (e) { root.focusMethod = 0 }
+      }
+    }
+  }
+
   // Hyprland's own window-move animation, so frames slide with their windows.
   property var moveAnimation: ({ duration: 0, bezier: [0.23, 1, 0.32, 1] })
 
@@ -100,7 +114,7 @@ Scope {
     target: Hyprland
     function onRawEvent(event) {
       var name = event ? String(event.name) : ""
-      if (name === "configreloaded") { bindsProc.running = true; animationsProc.running = true }
+      if (name === "configreloaded") { bindsProc.running = true; animationsProc.running = true; focusMethodProc.running = true }
       if (root.held) refreshDebounce.restart()
     }
   }
@@ -113,7 +127,7 @@ Scope {
     }
   }
 
-  Component.onCompleted: { bindsProc.running = true; animationsProc.running = true }
+  Component.onCompleted: { bindsProc.running = true; animationsProc.running = true; focusMethodProc.running = true }
 
   ShellIpc {
     target: "tiling-hints"
@@ -365,7 +379,7 @@ Scope {
           var monitors = []
           var all = Hyprland.monitors.values
           for (var j = 0; j < all.length; j++) if (all[j].lastIpcObject) monitors.push(logicalRect(all[j].lastIpcObject))
-          return Model.build(windows, monitorIpc ? logicalRect(monitorIpc) : null, monitors)
+          return Model.build(windows, monitorIpc ? logicalRect(monitorIpc) : null, monitors, root.focusMethod)
         }
 
         // What is drawn. liveLayout re-evaluates on every poll; this only
