@@ -8,11 +8,8 @@ import qs.Commons as Commons
 import "HintsModel.js" as Model
 
 // Tiling hints: while Super is held, draw the keys that act on each window
-// in and around its frame. Driven by a Hyprland hold bind:
-//
-//   o.bind_hold("SUPER + Super_L", "Show tiling hints", "omarchy-shell -q tiling-hints show",
-//               "Hide tiling hints", "omarchy-shell -q tiling-hints hide",
-//               { ignore_mods = true, non_consuming = true })
+// in and around its frame. Driven by a Hyprland hold bind on Super_L, which
+// the service adds itself at runtime (see "hold bind" below).
 //
 // The overlay is visual only: its input region is empty and it never takes
 // keyboard focus, so every Super chord and Super+drag still reaches Hyprland.
@@ -30,6 +27,8 @@ Scope {
   // A hold bind can miss its release (a VT switch, a lock screen taking the
   // keyboard). Never leave the overlay stuck for longer than this.
   property int maxHold: 30000
+  // Bind the Super hold in Hyprland while the plugin runs. Off: bind it yourself.
+  property bool autoBind: true
 
   property bool held: false
   property bool opened: false
@@ -114,7 +113,7 @@ Scope {
     target: Hyprland
     function onRawEvent(event) {
       var name = event ? String(event.name) : ""
-      if (name === "configreloaded") { bindsProc.running = true; animationsProc.running = true; focusMethodProc.running = true }
+      if (name === "configreloaded") { root.boundHere = false; root.ensureBind(); bindsProc.running = true; animationsProc.running = true; focusMethodProc.running = true }
       if (root.held) refreshDebounce.restart()
     }
   }
@@ -127,7 +126,53 @@ Scope {
     }
   }
 
-  Component.onCompleted: { bindsProc.running = true; animationsProc.running = true; focusMethodProc.running = true }
+  // ------------------------------------------------------------ hold bind
+  //
+  // The plugin binds the Super hold itself while it runs, through Hyprland's
+  // Lua eval (no config file is touched). A config reload drops runtime binds,
+  // so it is added again after each one. A hold bind already present, such as
+  // one written in bindings.lua by hand, is left alone and none is added.
+  property bool boundHere: false
+
+  readonly property string holdKeys: "SUPER + Super_L"
+  readonly property string bindExpr: 'o.bind_hold("' + holdKeys + '", "' + Model.HOLD_DESCRIPTION + '", '
+    + '"omarchy-shell -q tiling-hints show", "Hide tiling hints", "omarchy-shell -q tiling-hints hide", '
+    + '{ ignore_mods = true, non_consuming = true })'
+
+  function ensureBind() {
+    if (autoBind && !existingBindProc.running) existingBindProc.running = true
+  }
+
+  Process {
+    id: existingBindProc
+    command: ["hyprctl", "binds", "-j"]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        if (Model.hasHoldBind(this.text)) return
+        root.boundHere = true
+        addBindProc.running = true
+      }
+    }
+  }
+
+  Process {
+    id: addBindProc
+    command: ["hyprctl", "eval", root.bindExpr]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        if (this.text.trim() === "ok") { bindsProc.running = true; return }
+        root.boundHere = false
+        console.warn("tiling-hints: could not add the Super hold bind: " + this.text.trim())
+      }
+    }
+  }
+
+  // Disabling the plugin (or the shell going down) takes its bind with it.
+  Component.onDestruction: {
+    if (boundHere) Quickshell.execDetached(["hyprctl", "eval", 'hl.unbind("' + holdKeys + '")'])
+  }
+
+  Component.onCompleted: { ensureBind(); bindsProc.running = true; animationsProc.running = true; focusMethodProc.running = true }
 
   ShellIpc {
     target: "tiling-hints"

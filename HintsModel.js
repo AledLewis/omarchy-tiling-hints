@@ -338,6 +338,20 @@ function parsePrinted(text) {
 // through its tree (windowsMove -> windows -> global) from
 // `hyprctl animations -j`: [ [animations], [beziers] ].
 
+// The Super hold bind is added at runtime unless one already exists, which
+// is how installs from before 0.4 set it up (by hand, in bindings.lua). The
+// bind runs a Lua closure, so its description is the only thing to match on.
+var HOLD_DESCRIPTION = "Show tiling hints"
+
+function hasHoldBind(json) {
+  var binds
+  try { binds = JSON.parse(json) } catch (e) { return false }
+  if (!Array.isArray(binds)) return false
+  for (var i = 0; i < binds.length; i++)
+    if (binds[i] && binds[i].description === HOLD_DESCRIPTION) return true
+  return false
+}
+
 var ANIMATION_PARENTS = { windowsMove: "windows", windows: "global" }
 
 function windowMoveAnimation(json) {

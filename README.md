@@ -15,7 +15,7 @@ Keys are never hard-coded. They come from `omarchy menu keybindings --print`, so
 - Omarchy with the Quickshell-based Omarchy shell (Quattro), running Hyprland.
 - No extra packages. At runtime it calls only tools Omarchy already ships: `hyprctl` (window geometry, animation settings, `binds:focus_preferred_method`), `omarchy-menu-keybindings --print` (current key bindings) and, from your Hyprland bind, `omarchy-shell`.
 
-It makes no network requests, writes no files, and never changes your configuration: the Hyprland bind below is something you add yourself.
+It makes no network requests, writes no files, and never changes your configuration: its Super hold bind is added to the running Hyprland through `hyprctl eval` and is gone when the plugin is disabled or Hyprland restarts.
 
 ## Install
 
@@ -23,30 +23,23 @@ It makes no network requests, writes no files, and never changes your configurat
 omarchy plugin add https://github.com/AledLewis/omarchy-tiling-hints --enable
 ```
 
-Then add the Super hold to `~/.config/hypr/bindings.lua` (Hyprland reloads on save):
+That's it: the plugin binds the Super hold itself while it runs, so there is nothing to add to your Hyprland config. The bind is non-consuming and ignores other modifiers, so every existing Super shortcut keeps working, and it is added again whenever Hyprland reloads its config.
 
-```lua
-o.bind_hold("SUPER + Super_L", "Show tiling hints", "omarchy-shell -q tiling-hints show",
-  "Hide tiling hints", "omarchy-shell -q tiling-hints hide",
-  { ignore_mods = true, non_consuming = true })
-```
-
-The bind is non-consuming and ignores other modifiers, so every existing Super shortcut keeps working.
+**Upgrading from 0.3 or earlier**, where the bind was added by hand? You can delete the `o.bind_hold("SUPER + Super_L", ...)` lines from `~/.config/hypr/bindings.lua`. Leaving them in is fine too: the plugin sees a bind described "Show tiling hints" already exists and doesn't add a second. That is also how to choose a different key: bind your own with that description and the plugin steps aside.
 
 Update later with `omarchy plugin update aledlewis.tiling-hints`, then `omarchy restart shell`.
 
 ## Remove
 
-1. Delete the `o.bind_hold("SUPER + Super_L", ...)` lines from `~/.config/hypr/bindings.lua`.
-2. Remove the plugin:
+```bash
+omarchy plugin remove aledlewis.tiling-hints
+```
 
-   ```bash
-   omarchy plugin remove aledlewis.tiling-hints
-   ```
+The Super hold bind goes with it. If you added the bind to `bindings.lua` yourself, delete those lines too.
 
 ## Tuning
 
-At the top of `Service.qml`: `showDelay` (ms before the overlay appears, so quick chords don't flash it) and `maxHold` (safety auto-hide if a key release is ever missed).
+At the top of `Service.qml`: `showDelay` (ms before the overlay appears, so quick chords don't flash it), `maxHold` (safety auto-hide if a key release is ever missed), and `autoBind` (set to `false` to stop the plugin binding Super itself).
 
 ## IPC
 

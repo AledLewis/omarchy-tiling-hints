@@ -239,4 +239,14 @@ test("a card bigger than its window spills evenly and keeps out of the others", 
   noOverlaps(places, sizes)
   assert.strictEqual(places["a|center"].x, -30)
 })
+const HB = (() => { const c = {}; vm.runInNewContext(src + "\nthis.h = { hasHoldBind };", c); return c.h })()
+
+test("an existing Super hold bind is found by its description", () => {
+  const bind = (description, key) => ({ key, modmask: 64, dispatcher: "__lua", description })
+  assert.strictEqual(HB.hasHoldBind(JSON.stringify([bind("Close window", "W"), bind("Show tiling hints", "Super_L")])), true)
+  assert.strictEqual(HB.hasHoldBind(JSON.stringify([bind("Close window", "W")])), false)
+  assert.strictEqual(HB.hasHoldBind(JSON.stringify([bind("Show tiling hints", "Super_R")])), true, "a rebound key still counts")
+  assert.strictEqual(HB.hasHoldBind(""), false)
+  assert.strictEqual(HB.hasHoldBind("{}"), false)
+})
 console.log(`${passed} passed`)
