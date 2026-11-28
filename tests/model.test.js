@@ -239,7 +239,7 @@ test("a card bigger than its window spills evenly and keeps out of the others", 
   noOverlaps(places, sizes)
   assert.strictEqual(places["a|center"].x, -30)
 })
-const HB = (() => { const c = {}; vm.runInNewContext(src + "\nthis.h = { hasHoldBind };", c); return c.h })()
+const HB = (() => { const c = {}; vm.runInNewContext(src + "\nthis.h = { hasHoldBind, holdBindLua, holdReuseLua, holdDisableLua, reusedHold };", c); return c.h })()
 
 test("an existing Super hold bind is found by its description", () => {
   const bind = (description, key) => ({ key, modmask: 64, dispatcher: "__lua", description })
@@ -248,5 +248,21 @@ test("an existing Super hold bind is found by its description", () => {
   assert.strictEqual(HB.hasHoldBind(JSON.stringify([bind("Show tiling hints", "Super_R")])), true, "a rebound key still counts")
   assert.strictEqual(HB.hasHoldBind(""), false)
   assert.strictEqual(HB.hasHoldBind("{}"), false)
+})
+test("the hold bind Lua keeps its handles and never unbinds the chord", () => {
+  const all = [HB.holdBindLua("SUPER + Super_L"), HB.holdReuseLua(), HB.holdDisableLua()].join("\n")
+  assert.ok(!/unbind|:remove\(/.test(all), "nothing chord-wide or crash-prone")
+  const bind = HB.holdBindLua("SUPER + Super_L")
+  assert.strictEqual((bind.match(/hl\.bind\("SUPER \+ Super_L"/g) || []).length, 2)
+  assert.ok(bind.includes('description = "Show tiling hints"'), "matches what hasHoldBind looks for")
+  assert.ok(/release = true, transparent = true, ignore_mods = true/.test(bind))
+  assert.ok(HB.holdDisableLua().includes("set_enabled(false)"))
+  assert.ok(HB.holdReuseLua().includes("set_enabled(true)"))
+})
+
+test("a reuse is read from the eval's error text", () => {
+  assert.strictEqual(HB.reusedHold('error: [string "if tiling_hints_binds..."]:1: tiling-hints: reused'), true)
+  assert.strictEqual(HB.reusedHold("ok"), false)
+  assert.strictEqual(HB.reusedHold(""), false)
 })
 console.log(`${passed} passed`)

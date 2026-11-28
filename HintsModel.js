@@ -352,6 +352,45 @@ function hasHoldBind(json) {
   return false
 }
 
+// The Lua run through `hyprctl eval` to manage that bind. The two bind
+// handles live in a Lua global, so the plugin only ever touches its own
+// binds: `hl.unbind(keys)` and a handle's `remove()`/`unbind()` all clear
+// every bind on the chord, including the user's, and `remove()` from a later
+// eval than the one that made the handle crashes Hyprland 0.56. Unloading
+// disables the handles instead; a config reload clears both the binds and
+// the global, so no handle outlives its bind.
+var HOLD_GLOBAL = "tiling_hints_binds"
+var HOLD_REUSED = "tiling-hints: reused"
+
+// Turn back on the handles a previous shell left disabled (a restart with no
+// config reload in between). The eval's error is the only way to report back.
+function holdReuseLua() {
+  return "if " + HOLD_GLOBAL + " then for _, h in ipairs(" + HOLD_GLOBAL + ") do h:set_enabled(true) end; "
+    + "error(\"" + HOLD_REUSED + "\") end"
+}
+
+function reusedHold(output) {
+  return String(output || "").indexOf(HOLD_REUSED) !== -1
+}
+
+// What o.bind_hold does, but keeping the handles. Options mirror it: the
+// release half must ignore the modifier mask, which changes as Super lifts.
+function holdBindLua(keys) {
+  var k = JSON.stringify(keys)
+  return "local held = false; "
+    + "local show, hide = \"omarchy-shell -q tiling-hints show\", \"omarchy-shell -q tiling-hints hide\"; "
+    + "local function on_press() held = true; hl.exec_cmd(show) end; "
+    + "local function on_release() if held then held = false; hl.exec_cmd(hide) end end; "
+    + "if o and o.bind_commands then o.bind_commands[on_press] = show; o.bind_commands[on_release] = hide end; "
+    + HOLD_GLOBAL + " = { "
+    + "hl.bind(" + k + ", on_press, { description = \"" + HOLD_DESCRIPTION + "\", ignore_mods = true, non_consuming = true }), "
+    + "hl.bind(" + k + ", on_release, { description = \"Hide tiling hints\", release = true, transparent = true, ignore_mods = true, non_consuming = true }) }"
+}
+
+function holdDisableLua() {
+  return "if " + HOLD_GLOBAL + " then for _, h in ipairs(" + HOLD_GLOBAL + ") do h:set_enabled(false) end end"
+}
+
 var ANIMATION_PARENTS = { windowsMove: "windows", windows: "global" }
 
 function windowMoveAnimation(json) {

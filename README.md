@@ -15,7 +15,7 @@ Keys are never hard-coded. They come from `omarchy menu keybindings --print`, so
 - Omarchy with the Quickshell-based Omarchy shell (Quattro), running Hyprland.
 - No extra packages. At runtime it calls only tools Omarchy already ships: `hyprctl` (window geometry, animation settings, `binds:focus_preferred_method`), `omarchy-menu-keybindings --print` (current key bindings) and, from your Hyprland bind, `omarchy-shell`.
 
-It makes no network requests, writes no files, and never changes your configuration: its Super hold bind is added to the running Hyprland through `hyprctl eval` and is gone when the plugin is disabled or Hyprland restarts.
+It makes no network requests, writes no files, and never changes your configuration: its Super hold bind is added to the running Hyprland through `hyprctl eval`, is switched off when the plugin is disabled, and is gone after the next config reload or restart. It never unbinds anything, so your own binds on Super are left alone.
 
 ## Install
 

@@ -129,20 +129,33 @@ Scope {
   // ------------------------------------------------------------ hold bind
   //
   // The plugin binds the Super hold itself while it runs, through Hyprland's
-  // Lua eval (no config file is touched). A config reload drops runtime binds,
-  // so it is added again after each one. A hold bind already present, such as
-  // one written in bindings.lua by hand, is left alone and none is added.
+  // Lua eval (no config file is touched). It keeps the two bind handles and
+  // only ever enables or disables those, so a user's own binds on Super_L are
+  // never touched (see HintsModel.js for why nothing is unbound). A config
+  // reload drops runtime binds, so they are added again after each one. A
+  // hold bind already present, such as one written in bindings.lua by hand,
+  // is left alone and none is added.
   property bool boundHere: false
 
   readonly property string holdKeys: "SUPER + Super_L"
-  readonly property string bindExpr: 'o.bind_hold("' + holdKeys + '", "' + Model.HOLD_DESCRIPTION + '", '
-    + '"omarchy-shell -q tiling-hints show", "Hide tiling hints", "omarchy-shell -q tiling-hints hide", '
-    + '{ ignore_mods = true, non_consuming = true })'
 
   function ensureBind() {
-    if (autoBind && !existingBindProc.running) existingBindProc.running = true
+    if (autoBind && !reuseBindProc.running && !existingBindProc.running) reuseBindProc.running = true
   }
 
+  // 1. Handles left by a previous shell (restart without a reload): enable them.
+  Process {
+    id: reuseBindProc
+    command: ["hyprctl", "eval", Model.holdReuseLua()]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        if (Model.reusedHold(this.text)) { root.boundHere = true; bindsProc.running = true; return }
+        existingBindProc.running = true
+      }
+    }
+  }
+
+  // 2. Otherwise add the bind, unless one with its description exists already.
   Process {
     id: existingBindProc
     command: ["hyprctl", "binds", "-j"]
@@ -157,7 +170,7 @@ Scope {
 
   Process {
     id: addBindProc
-    command: ["hyprctl", "eval", root.bindExpr]
+    command: ["hyprctl", "eval", Model.holdBindLua(root.holdKeys)]
     stdout: StdioCollector {
       onStreamFinished: {
         if (this.text.trim() === "ok") { bindsProc.running = true; return }
@@ -167,9 +180,9 @@ Scope {
     }
   }
 
-  // Disabling the plugin (or the shell going down) takes its bind with it.
+  // Disabling the plugin (or the shell going down) switches its bind off.
   Component.onDestruction: {
-    if (boundHere) Quickshell.execDetached(["hyprctl", "eval", 'hl.unbind("' + holdKeys + '")'])
+    if (boundHere) Quickshell.execDetached(["hyprctl", "eval", Model.holdDisableLua()])
   }
 
   Component.onCompleted: { ensureBind(); bindsProc.running = true; animationsProc.running = true; focusMethodProc.running = true }
