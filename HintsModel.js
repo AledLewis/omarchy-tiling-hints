@@ -354,19 +354,34 @@ function hasHoldBind(json) {
 
 // The Lua run through `hyprctl eval` to manage that bind. The two bind
 // handles live in a Lua global, so the plugin only ever touches its own
-// binds: `hl.unbind(keys)` and a handle's `remove()`/`unbind()` all clear
-// every bind on the chord, including the user's, and `remove()` from a later
-// eval than the one that made the handle crashes Hyprland 0.56. Unloading
-// disables the handles instead; a config reload clears both the binds and
-// the global, so no handle outlives its bind.
+// binds: `hl.unbind(keys)` and, on Hyprland 0.56, a handle's
+// `remove()`/`unbind()` clear every bind on the chord, including the user's.
+// Unloading disables the handles instead. A config reload clears both the
+// binds and the global.
+//
+// A handle can still outlive its bind (anything that unbinds Super_L at
+// runtime, such as `o.rebind`), and on 0.56 calling `set_enabled` or
+// `remove` on such a handle dereferences a null bind and crashes the
+// compositor. `tostring()` is the one method that checks properly, so every
+// call is guarded by it. Hyprland 0.57 fixes both problems.
 var HOLD_GLOBAL = "tiling_hints_binds"
 var HOLD_REUSED = "tiling-hints: reused"
+var HOLD_EXPIRED = "HL.Keybind(expired)"
+
+function holdAliveLua(h) {
+  return "tostring(" + h + ") ~= \"" + HOLD_EXPIRED + "\""
+}
 
 // Turn back on the handles a previous shell left disabled (a restart with no
 // config reload in between). The eval's error is the only way to report back.
+// If either bind has gone, forget the handles so fresh binds are added.
 function holdReuseLua() {
-  return "if " + HOLD_GLOBAL + " then for _, h in ipairs(" + HOLD_GLOBAL + ") do h:set_enabled(true) end; "
-    + "error(\"" + HOLD_REUSED + "\") end"
+  var G = HOLD_GLOBAL
+  return "if " + G + " then local alive = true; "
+    + "for _, h in ipairs(" + G + ") do if not (" + holdAliveLua("h") + ") then alive = false end end; "
+    + "if alive then for _, h in ipairs(" + G + ") do h:set_enabled(true) end; error(\"" + HOLD_REUSED + "\") end; "
+    + "for _, h in ipairs(" + G + ") do if " + holdAliveLua("h") + " then h:set_enabled(false) end end; "
+    + G + " = nil end"
 }
 
 function reusedHold(output) {
@@ -388,7 +403,8 @@ function holdBindLua(keys) {
 }
 
 function holdDisableLua() {
-  return "if " + HOLD_GLOBAL + " then for _, h in ipairs(" + HOLD_GLOBAL + ") do h:set_enabled(false) end end"
+  return "if " + HOLD_GLOBAL + " then for _, h in ipairs(" + HOLD_GLOBAL + ") do "
+    + "if " + holdAliveLua("h") + " then h:set_enabled(false) end end end"
 }
 
 var ANIMATION_PARENTS = { windowsMove: "windows", windows: "global" }

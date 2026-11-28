@@ -260,6 +260,14 @@ test("the hold bind Lua keeps its handles and never unbinds the chord", () => {
   assert.ok(HB.holdReuseLua().includes("set_enabled(true)"))
 })
 
+test("every handle method call is guarded against an expired bind", () => {
+  for (const lua of [HB.holdReuseLua(), HB.holdDisableLua()]) {
+    const calls = (lua.match(/h:set_enabled/g) || []).length
+    const guards = (lua.match(/tostring\(h\) ~= "HL\.Keybind\(expired\)"/g) || []).length
+    assert.ok(calls > 0 && guards >= calls, lua)
+  }
+})
+
 test("a reuse is read from the eval's error text", () => {
   assert.strictEqual(HB.reusedHold('error: [string "if tiling_hints_binds..."]:1: tiling-hints: reused'), true)
   assert.strictEqual(HB.reusedHold("ok"), false)
